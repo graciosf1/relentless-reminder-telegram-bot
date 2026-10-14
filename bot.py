@@ -24,7 +24,7 @@ from apscheduler.triggers.date import DateTrigger
 logging.basicConfig(level=logging.INFO)
 
 # --- КОНФИГУРАЦИЯ ---
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "8885604141:AAFnhozyHlL_fQPPhjTa39B28NF2DJ-8-84")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -40,6 +40,20 @@ REWARD_GIFS = [
     "https://media.giphy.com/media/g9582DNuQppxC/giphy.gif",
     "https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif",
     "https://media.giphy.com/media/XreQmk7ETCak0/giphy.gif",
+]
+
+SLEEP_GIFS = [
+    "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExb3drMWdlbHRobjliN3BiaHhybXo2MDVmZXc2eHF0dTFxc2RpZ3Q4eiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/pyXr9Ch7IBTmsmMNXf/giphy.gif",
+    "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExZjU2cTFtODZza2plaG9idHJlODFka2RnYnMzZGZiZ2ptc2toOGg1dCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/va296uB0Z3M1OxyrDK/giphy.gif",
+    "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExbjZmNG95Ynpic3oyMXpoejRld3FncGVoOG05aTRxcmRzdzBiZWQzOSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/bDOthh7ahHFnm7ZRRc/giphy.gif",
+]
+
+ANOTHER_GIFS = [
+    "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExZHdnN2gxZnZna3dxajhqazV2eTFmbmVxeDFiejV5eDcxd3poMTU3diZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/uHoLdWb1B0paP6X5Ux/giphy.gif",
+    "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExZTB5OXdlenY5MXVyd3Z5ZHR3N2EzNDZoMG02cmVoNWtmNnV1amI2dCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3oEdv2X9swrq7r9iSs/giphy.gif",
+    "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExaGo2ZjM4N3M2bHhhYXBoNHRwMWZxZmZlbGlhcXdtb3Azcjc4N3VuciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Y3rqZBVKi6TQxGzaYT/giphy.gif",
+    "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExajdybm1yb3FiOW5tam01bTRjc3QyMjF6Y3VkNHhyNjdsajB5NHN0bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/IglQkzvuewsoD6E1Pj/giphy.gif",
+
 ]
 
 # Хранилище задач
@@ -185,9 +199,13 @@ async def send_daily_summary():
             + "\n".join(lines)
             + "\n\nОтличная работа! Время отдыхать 😴"
         )
-
         try:
+            # 1. Отправляем текст со сводкой
             await bot.send_message(chat_id=chat_id, text=summary_text, parse_mode="Markdown")
+
+            # 2. Выбираем случайную гифку и отправляем её
+            sleep_gif = random.choice(SLEEP_GIFS)
+            await bot.send_animation(chat_id=chat_id, animation=sleep_gif)
         except Exception as e:
             logging.error(f"Ошибка при отправке сводки: {e}")
 
@@ -355,10 +373,12 @@ async def cmd_summary_now(message: Message):
         + (" _(с переносом)_" if item["rescheduled"] else " _(с первого раза! 🔥)_")
         for i, item in enumerate(done_list, 1)
     ]
-    await message.answer(
-        f"📊 **Выполнено за сегодня ({len(done_list)}):**\n\n" + "\n".join(lines),
-        parse_mode="Markdown",
-    )
+    summary_text = f"📊 **Выполнено за сегодня ({len(done_list)}):**\n\n" + "\n".join(lines)
+
+    # Отправляем текст и гифку
+    await message.answer(summary_text, parse_mode="Markdown")
+    anoth_gif = random.choice(ANOTHER_GIFS)
+    await message.answer_animation(animation=anoth_gif)
 
 
 @router.message(StateFilter(None), F.text)
