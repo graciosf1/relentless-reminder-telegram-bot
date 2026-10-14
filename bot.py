@@ -16,6 +16,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
+from aiohttp import web
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -401,6 +402,21 @@ async def handle_new_reminder(message: Message):
 
 
 # --- ТОЧКА ВХОДА ---
+async def handle_ping(request):
+    """Отвечает серверу Render, что сервис жив"""
+    return web.Response(text="Bot is running!")
+
+async def start_dummy_server():
+    """Фейковый веб-сервер для бесплатного тарифа Render"""
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/healthz", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
 async def main():
     dp.include_router(router)
 
@@ -412,9 +428,17 @@ async def main():
     )
     scheduler.start()
 
+    # Запускаем фоновый веб-сервер для Render
+    await start_dummy_server()
+
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Бот остановлен.")
 
 if __name__ == "__main__":
     try:
