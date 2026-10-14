@@ -24,8 +24,7 @@ from apscheduler.triggers.date import DateTrigger
 logging.basicConfig(level=logging.INFO)
 
 # --- КОНФИГУРАЦИЯ ---
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "8885604141:AAFjCmo3C20Ew_As1tjcRSjMeSZhKt8taHY")
-
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 router = Router()
