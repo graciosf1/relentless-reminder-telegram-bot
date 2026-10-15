@@ -24,7 +24,7 @@ from apscheduler.triggers.date import DateTrigger
 logging.basicConfig(level=logging.INFO)
 
 # --- КОНФИГУРАЦИЯ ---
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "8885604141:AAFnhozyHlL_fQPPhjTa39B28NF2DJ-8-84")
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -33,7 +33,7 @@ scheduler = AsyncIOScheduler()
 # Интервалы чекпоинтов в минутах (15 -> 10 -> 5 -> 2 -> 1...)
 ESCALATION_MINUTES = [15, 10, 5, 2, 1]
 
-# Награды (гифки) за выполнение задачи
+# Награды (гифки) за выполнение задачи, перед сном и при проверке сделанного
 REWARD_GIFS = [
     "https://media.giphy.com/media/111ebonMs90YLu/giphy.gif",
     "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
