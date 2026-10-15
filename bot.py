@@ -21,10 +21,16 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 # --- КОНФИГУРАЦИЯ ---
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+if not TELEGRAM_TOKEN:
+    logging.error("КРИТИЧЕСКАЯ ОШИБКА: Переменная BOT_TOKEN не найдена в переменных окружения!")
+
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
 router = Router()
@@ -33,7 +39,7 @@ scheduler = AsyncIOScheduler()
 # Интервалы чекпоинтов в минутах (15 -> 10 -> 5 -> 2 -> 1...)
 ESCALATION_MINUTES = [15, 10, 5, 2, 1]
 
-# Награды (гифки) за выполнение задачи, перед сном и при проверке сделанного
+# Наборы GIF-анимаций
 REWARD_GIFS = [
     "https://media.giphy.com/media/111ebonMs90YLu/giphy.gif",
     "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",
@@ -53,7 +59,6 @@ ANOTHER_GIFS = [
     "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExZTB5OXdlenY5MXVyd3Z5ZHR3N2EzNDZoMG02cmVoNWtmNnV1amI2dCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/3oEdv2X9swrq7r9iSs/giphy.gif",
     "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExaGo2ZjM4N3M2bHhhYXBoNHRwMWZxZmZlbGlhcXdtb3Azcjc4N3VuciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Y3rqZBVKi6TQxGzaYT/giphy.gif",
     "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExajdybm1yb3FiOW5tam01bTRjc3QyMjF6Y3VkNHhyNjdsajB5NHN0bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/IglQkzvuewsoD6E1Pj/giphy.gif",
-
 ]
 
 # Хранилище задач
@@ -153,8 +158,8 @@ async def trigger_checkpoint(task_id: str):
 
     reason_note = f"\n_(Откладывалось ранее по причине: «{task['reason']}»)_" if task["rescheduled"] else ""
     warning = (
-        f"\n\n⏱ Если не ответить, повторю через **{next_delay_min} мин.**"
-        + ("\n⚠️ _Перенос больше недоступен! Только выполнение._" if not can_reschedule else "")
+            f"\n\n⏱ Если не ответить, повторю через **{next_delay_min} мин.**"
+            + ("\n⚠️ _Перенос больше недоступен! Только выполнение._" if not can_reschedule else "")
     )
 
     try:
@@ -194,16 +199,13 @@ async def send_daily_summary():
             lines.append(f"{i}. **{item['text']}** — в {item['time']}{note}")
 
         summary_text = (
-            "🌙 **Итоги дня (23:00)!**\n\n"
-            f"Сегодня закрыто задач: **{len(done_list)}**\n\n"
-            + "\n".join(lines)
-            + "\n\nОтличная работа! Время отдыхать 😴"
+                "🌙 **Итоги дня (23:00)!**\n\n"
+                f"Сегодня закрыто задач: **{len(done_list)}**\n\n"
+                + "\n".join(lines)
+                + "\n\nОтличная работа! Время отдыхать 😴"
         )
         try:
-            # 1. Отправляем текст со сводкой
             await bot.send_message(chat_id=chat_id, text=summary_text, parse_mode="Markdown")
-
-            # 2. Выбираем случайную гифку и отправляем её
             sleep_gif = random.choice(SLEEP_GIFS)
             await bot.send_animation(chat_id=chat_id, animation=sleep_gif)
         except Exception as e:
@@ -375,7 +377,6 @@ async def cmd_summary_now(message: Message):
     ]
     summary_text = f"📊 **Выполнено за сегодня ({len(done_list)}):**\n\n" + "\n".join(lines)
 
-    # Отправляем текст и гифку
     await message.answer(summary_text, parse_mode="Markdown")
     anoth_gif = random.choice(ANOTHER_GIFS)
     await message.answer_animation(animation=anoth_gif)
@@ -420,25 +421,31 @@ async def handle_new_reminder(message: Message):
     )
 
 
-# --- ТОЧКА ВХОДА ---
+# --- ТОЧКА ВХОДА И ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 async def handle_ping(request):
-    """Отвечает серверу Render, что сервис жив"""
+    """Отвечает серверу Render, что сервис жив (Health Check)"""
     return web.Response(text="Bot is running!")
 
+
 async def start_dummy_server():
-    """Фейковый веб-сервер для бесплатного тарифа Render"""
+    """Фейковый веб-сервер для Web Service тарифа Render"""
     app = web.Application()
     app.router.add_get("/", handle_ping)
     app.router.add_get("/healthz", handle_ping)
+
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", 8080))
+
+    port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+    logging.info(f"Веб-сервер заглушки запущен на порту {port}")
+
 
 async def main():
     dp.include_router(router)
 
+    # Вечерняя сводка в 23:00
     scheduler.add_job(
         send_daily_summary,
         trigger=CronTrigger(hour=23, minute=0),
@@ -447,20 +454,20 @@ async def main():
     )
     scheduler.start()
 
-    # Запускаем фоновый веб-сервер для Render
+    # Запуск фонового веб-сервера для Render
     await start_dummy_server()
 
+    # Сброс зависших апдейтов перед стартом
     await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+
+    try:
+        await dp.start_polling(bot)
+    finally:
+        scheduler.shutdown(wait=False)
+        await bot.session.close()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logging.info("Бот остановлен.")
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("Бот остановлен.")
+        logging.info("Бот корректно остановлен.")
