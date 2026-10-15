@@ -21,6 +21,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
+import db
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -60,10 +62,6 @@ ANOTHER_GIFS = [
     "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExaGo2ZjM4N3M2bHhhYXBoNHRwMWZxZmZlbGlhcXdtb3Azcjc4N3VuciZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/Y3rqZBVKi6TQxGzaYT/giphy.gif",
     "https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExajdybm1yb3FiOW5tam01bTRjc3QyMjF6Y3VkNHhyNjdsajB5NHN0bSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/IglQkzvuewsoD6E1Pj/giphy.gif",
 ]
-
-# Хранилище задач
-tasks_db: dict[str, dict] = {}
-completed_today: dict[int, list[dict]] = {}
 
 
 # --- СОСТОЯНИЯ (FSM) ДЛЯ ПЕРЕНОСА ЗАДАЧИ ---
@@ -141,12 +139,13 @@ def parse_time_input(user_text: str, require_text: bool = True) -> tuple[datetim
 
 # --- ЧЕКПОИНТЫ И СВОДКА ---
 async def trigger_checkpoint(task_id: str):
-    task = tasks_db.get(task_id)
+    task = await db.get_task(task_id)
     if not task:
         return
 
     step = task["step"]
-    can_reschedule = not task["rescheduled"]
+    is_rescheduled = bool(task["rescheduled"])
+    can_reschedule = not is_rescheduled
 
     idx = min(step, len(ESCALATION_MINUTES) - 1)
     next_delay_min = ESCALATION_MINUTES[idx]
@@ -156,10 +155,10 @@ async def trigger_checkpoint(task_id: str):
     else:
         header = f"🚨 **ЧЕКПОИНТ №{step}! Вы не отметили задачу!**"
 
-    reason_note = f"\n_(Откладывалось ранее по причине: «{task['reason']}»)_" if task["rescheduled"] else ""
+    reason_note = f"\n_(Откладывалось ранее по причине: «{task['reason']}»)_" if is_rescheduled else ""
     warning = (
-            f"\n\n⏱ Если не ответить, повторю через **{next_delay_min} мин.**"
-            + ("\n⚠️ _Перенос больше недоступен! Только выполнение._" if not can_reschedule else "")
+        f"\n\n⏱ Если не ответить, повторю через **{next_delay_min} мин.**"
+        + ("\n⚠️ _Перенос больше недоступен! Только выполнение._" if not can_reschedule else "")
     )
 
     try:
@@ -172,8 +171,10 @@ async def trigger_checkpoint(task_id: str):
     except Exception as e:
         logging.error(f"Ошибка при отправке чекпоинта: {e}")
 
-    task["step"] += 1
+    new_step = step + 1
     next_run = datetime.now() + timedelta(minutes=next_delay_min)
+
+    await db.update_task_step(task_id, new_step, next_run)
 
     scheduler.add_job(
         trigger_checkpoint,
@@ -185,40 +186,43 @@ async def trigger_checkpoint(task_id: str):
 
 
 async def send_daily_summary():
-    """Сводка в 23:00"""
-    if not completed_today:
+    """Сводка в 23:00 по всем пользователям"""
+    all_completed = await db.get_daily_completed()
+    if not all_completed:
         return
 
-    for chat_id, done_list in list(completed_today.items()):
-        if not done_list:
-            continue
+    # Группируем задачи по chat_id
+    by_user: dict[int, list[dict]] = {}
+    for item in all_completed:
+        by_user.setdefault(item["chat_id"], []).append(item)
 
+    for chat_id, done_list in by_user.items():
         lines = []
         for i, item in enumerate(done_list, 1):
             note = " _(с переносом)_" if item["rescheduled"] else " _(с первого раза! 🔥)_"
             lines.append(f"{i}. **{item['text']}** — в {item['time']}{note}")
 
         summary_text = (
-                "🌙 **Итоги дня (23:00)!**\n\n"
-                f"Сегодня закрыто задач: **{len(done_list)}**\n\n"
-                + "\n".join(lines)
-                + "\n\nОтличная работа! Время отдыхать 😴"
+            "🌙 **Итоги дня (23:00)!**\n\n"
+            f"Сегодня закрыто задач: **{len(done_list)}**\n\n"
+            + "\n".join(lines)
+            + "\n\nОтличная работа! Время отдыхать 😴"
         )
         try:
             await bot.send_message(chat_id=chat_id, text=summary_text, parse_mode="Markdown")
             sleep_gif = random.choice(SLEEP_GIFS)
             await bot.send_animation(chat_id=chat_id, animation=sleep_gif)
         except Exception as e:
-            logging.error(f"Ошибка при отправке сводки: {e}")
+            logging.error(f"Ошибка при отправке сводки пользователю {chat_id}: {e}")
 
-    completed_today.clear()
+    await db.clear_old_completed()
 
 
 # --- ОБРАБОТЧИКИ НАЖАТИЙ НА КНОПКИ ---
 @router.callback_query(F.data.startswith("done:"))
 async def cb_task_done(callback: CallbackQuery, state: FSMContext):
     task_id = callback.data.split(":")[1]
-    task = tasks_db.pop(task_id, None)
+    task = await db.mark_task_done(task_id)
 
     if scheduler.get_job(task_id):
         scheduler.remove_job(task_id)
@@ -230,13 +234,6 @@ async def cb_task_done(callback: CallbackQuery, state: FSMContext):
             await state.clear()
 
     if task:
-        chat_id = task["chat_id"]
-        completed_today.setdefault(chat_id, []).append({
-            "text": task["text"],
-            "time": datetime.now().strftime("%H:%M"),
-            "rescheduled": task["rescheduled"],
-        })
-
         await callback.message.edit_text(
             f"✅ **Задача выполнена!**\n~{task['text']}~", parse_mode="Markdown"
         )
@@ -259,7 +256,7 @@ async def cb_task_done(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("postpone:"))
 async def cb_task_postpone(callback: CallbackQuery, state: FSMContext):
     task_id = callback.data.split(":")[1]
-    task = tasks_db.get(task_id)
+    task = await db.get_task(task_id)
 
     if not task:
         await callback.answer("Задача уже неактивна.", show_alert=True)
@@ -315,16 +312,14 @@ async def process_postpone_time(message: Message, state: FSMContext):
     data = await state.get_data()
     task_id = data.get("task_id")
     reason = data.get("reason")
-    task = tasks_db.get(task_id)
+    task = await db.get_task(task_id)
 
     if not task:
         await state.clear()
         await message.answer("Задача не найдена.")
         return
 
-    task["rescheduled"] = True
-    task["reason"] = reason
-    task["step"] = 0
+    await db.postpone_task(task_id, reason, run_date)
 
     scheduler.add_job(
         trigger_checkpoint,
@@ -365,7 +360,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
 @router.message(Command("summary"))
 async def cmd_summary_now(message: Message):
-    done_list = completed_today.get(message.chat.id, [])
+    done_list = await db.get_daily_completed(chat_id=message.chat.id)
     if not done_list:
         await message.answer("За сегодня пока нет закрытых задач. Всё еще впереди! 💪")
         return
@@ -397,13 +392,7 @@ async def handle_new_reminder(message: Message):
         return
 
     task_id = uuid.uuid4().hex[:8]
-    tasks_db[task_id] = {
-        "chat_id": message.chat.id,
-        "text": reminder_text,
-        "step": 0,
-        "rescheduled": False,
-        "reason": "",
-    }
+    await db.add_task(task_id, message.chat.id, reminder_text, run_date)
 
     scheduler.add_job(
         trigger_checkpoint,
@@ -442,10 +431,33 @@ async def start_dummy_server():
     logging.info(f"Веб-сервер заглушки запущен на порту {port}")
 
 
-async def main():
-    dp.include_router(router)
+async def restore_active_tasks():
+    """Восстанавливает активные задачи из БД при перезапуске бота"""
+    active_tasks = await db.get_all_active_tasks()
+    now = datetime.now()
+    for t in active_tasks:
+        run_date = datetime.fromisoformat(t["run_date"])
+        # Если время уже прошло пока бот был выключен, запускаем через 5 секунд
+        if run_date <= now:
+            run_date = now + timedelta(seconds=5)
 
-    # Вечерняя сводка в 23:00
+        scheduler.add_job(
+            trigger_checkpoint,
+            trigger=DateTrigger(run_date=run_date),
+            id=t["task_id"],
+            replace_existing=True,
+            kwargs={"task_id": t["task_id"]},
+        )
+    if active_tasks:
+        logging.info(f"Восстановлено активных задач из БД: {len(active_tasks)}")
+
+
+async def main():
+    # 1. Инициализируем базу данных
+    await db.init_db()
+
+    # 2. Подключаем роутер и запускаем планировщик
+    dp.include_router(router)
     scheduler.add_job(
         send_daily_summary,
         trigger=CronTrigger(hour=23, minute=0),
@@ -454,17 +466,20 @@ async def main():
     )
     scheduler.start()
 
-    # Запуск фонового веб-сервера для Render
+    # 3. Восстанавливаем задачи из БД
+    await restore_active_tasks()
+
+    # 4. Запускаем веб-сервер для Render
     await start_dummy_server()
 
-    # Сброс зависших апдейтов перед стартом
+    # 5. Запускаем поллинг Telegram
     await bot.delete_webhook(drop_pending_updates=True)
-
     try:
         await dp.start_polling(bot)
     finally:
         scheduler.shutdown(wait=False)
         await bot.session.close()
+
 
 if __name__ == "__main__":
     try:
